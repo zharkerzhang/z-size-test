@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta name="qu-mode" content="offline">
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <meta name="description" content="QU·WEB 量化日更看板：主看板 / 概念看板 / 策略看板">
+  <title>QU·WEB · 量化日更看板</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%230b0f17'/%3E%3Cpath d='M8 20l5-8 4 5 3-6 4 9' stroke='%2338bdf8' stroke-width='2.4' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="../assets/css/app.css?v=__ASSET_VERSION__">
+</head>
+<body>
+  <!-- ============ 顶栏：品牌 / 页签 / 交易日 / 全局刷新 / 示例数据徽章 ============ -->
+  <header class="topbar">
+    <div class="topbar-inner">
+      <a class="brand" href="#/market" aria-label="QU·WEB 首页">
+        <span class="brand-mark">QU<span class="brand-dot">·</span>WEB</span>
+        <span class="brand-sub">量化日更看板</span>
+      </a>
+
+      <nav class="tabs" id="tabs" role="tablist" aria-label="页面导航">
+        <a class="tab" role="tab" data-route="market" href="#/market">主看板</a>
+        <a class="tab" role="tab" data-route="concept" href="#/concept">概念看板</a>
+        <a class="tab" role="tab" data-route="policy" href="#/policy">策略看板</a>
+      </nav>
+
+      <div class="topbar-meta">
+        <span class="conn-status" id="conn-status" title="数据连接状态">
+          <i class="conn-dot is-pending" id="conn-dot"></i>
+          <span id="conn-text">连接中…</span>
+        </span>
+
+        <div class="dates">
+          <span class="date-item">交易日 <b id="trade-date">—</b></span>
+          <span class="date-sep">·</span>
+          <span class="date-item">下一交易日 <b id="next-date">—</b></span>
+        </div>
+
+        <button class="badge badge-warn mock-badge is-hidden" id="mock-badge" type="button"
+                title="接口未就绪时自动使用内置示例数据；点击可切换 实时 / 示例 模式">
+          示例数据
+        </button>
+
+        <span class="badge badge-warn is-hidden" id="offline-badge" title="当前为离线快照：数据来自 offline-data 静态导出包">离线快照</span>
+
+        <button class="btn btn-ghost" id="export-offline-btn" type="button"
+                title="把当前真实数据导出为静态 JSON 包（供离线/独立部署页面使用）">
+          <span>导出离线数据</span>
+        </button>
+
+        <button class="btn btn-ghost refresh-btn" id="refresh-btn" type="button" title="刷新全部数据">
+          <span class="refresh-icon" aria-hidden="true">↻</span>
+          <span>刷新</span>
+        </button>
+      </div>
+    </div>
+    <div class="degrade-hint is-hidden" id="degrade-hint"></div>
+  </header>
+
+  <!-- ============ 页面容器（hash 路由切换，不整页刷新） ============ -->
+  <main class="view" id="view" role="tabpanel" aria-live="polite">
+    <div class="page-init">
+      <div class="skeleton skeleton-title"></div>
+      <div class="skeleton-grid">
+        <div class="skeleton skeleton-card"></div>
+        <div class="skeleton skeleton-card"></div>
+        <div class="skeleton skeleton-card"></div>
+      </div>
+    </div>
+  </main>
+
+  <footer class="footer">
+    <span>QU·WEB v0.1 · 只读展示层</span>
+    <span class="footer-sep">|</span>
+    <span>数据源 MySQL stock2（只读）+ 策略快照</span>
+    <span class="footer-sep">|</span>
+    <span>红涨绿跌 · 金额单位 亿/万</span>
+    <span class="footer-mode" id="footer-mode"></span>
+  </footer>
+
+  <!-- 轻提示 -->
+  <div class="toast-root" id="toast-root" aria-live="polite" aria-atomic="true"></div>
+
+  <!-- ECharts（本地 UMD，勿换 CDN） -->
+  <script src="../vendor/echarts.min.js"></script>
+  <!-- 应用入口（原生 ES Module，无构建步骤） -->
+  <script type="module" src="../assets/js/app.js?v=__ASSET_VERSION__"></script>
+</body>
+</html>
