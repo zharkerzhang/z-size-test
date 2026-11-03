@@ -14,6 +14,7 @@
  */
 
 import * as api from '../api.js';
+import { buildStockKlineOption } from '../kline.js';
 import * as ui from '../ui.js';
 
 const MOCK_END = '2026-10-30';
@@ -674,6 +675,7 @@ function mount(root) {
     // 与左侧红绿家数并排后卡片更高，10 行可完整展示（不再用 is-short 限制高度滚动）
     wrapClass: 'is-short-rows',
     emptyText: '暂无成交额数据',
+    onRowClick: (row) => selectTopStock(row.symbol, row.name),
     columns: [
       { key: 'rank', title: '#', className: 'rank', width: 44 },
       { key: 'symbol', title: '代码', className: 'sym', width: 82 },
@@ -716,6 +718,105 @@ function mount(root) {
     topCard.root,
   );
   root.append(bottomRow);
+
+  /* ---------- 行 4：个股日线 K 线（点击成交额 TOP10 个股；根数跟随「指数列表」选择） ---------- */
+  const stockCard = ui.card({
+    title: '个股日线 K 线',
+    sub: '点击「成交额 TOP10」中的个股查看日线（根数跟随上方「指数列表」选择的天数）',
+    extra: ui.badge('未选择', 'missing'),
+  });
+  const stockBody = ui.el('div', { class: 'chart-host' });
+  stockBody.append(ui.emptyState('点击「成交额 TOP10」中的个股查看其日线 K 线',
+    'K 线根数与「红绿家数」一致，跟随指数列表选择的天数'));
+  stockCard.body.append(stockBody);
+  root.append(stockCard.root);
+
+  let stockChart = null;
+  const stockState = { symbol: null, name: '', loading: false, error: null, seq: 0, data: null };
+
+  function renderStockCard() {
+    const hasStock = Boolean(stockState.symbol);
+    stockCard.setTitle(hasStock
+      ? `个股日线 K 线 · ${stockState.name || ''} ${stockState.symbol}`.replace(/\s+/g, ' ').trim()
+      : '个股日线 K 线');
+    if (!hasStock) {
+      stockCard.setSub('点击「成交额 TOP10」中的个股查看日线（根数跟随上方「指数列表」选择的天数）');
+      stockCard.setExtra(ui.badge('未选择', 'missing'));
+      stockBody.replaceChildren(ui.emptyState('点击「成交额 TOP10」中的个股查看其日线 K 线',
+        'K 线根数与「红绿家数」一致，跟随指数列表选择的天数'));
+      if (stockChart) {
+        stockChart.dispose();
+        stockChart = null;
+      }
+      return;
+    }
+    stockCard.setExtra(ui.inlineGroup(
+      ui.badge(`${indexState.count} 根`, 'primary'),
+      ui.badge(`${stockState.symbol}`, 'missing'),
+    ));
+    if (stockState.loading) {
+      stockCard.setSub(`加载中…（${indexState.count} 根，跟随指数列表天数）`);
+      stockBody.replaceChildren(ui.loadingState('个股 K 线加载中…'));
+      if (stockChart) {
+        stockChart.dispose();
+        stockChart = null;
+      }
+      return;
+    }
+    if (stockState.error) {
+      stockCard.setSub('加载失败');
+      stockBody.replaceChildren(ui.errorState(stockState.error,
+        () => loadStockChart(stockState.symbol, stockState.name)));
+      if (stockChart) {
+        stockChart.dispose();
+        stockChart = null;
+      }
+      return;
+    }
+    const bars = (stockState.data && stockState.data.bars) || [];
+    if (!bars.length) {
+      stockBody.replaceChildren(ui.emptyState('暂无该股 K 线数据'));
+      return;
+    }
+    stockCard.setSub(`${bars[0].date} ~ ${bars[bars.length - 1].date} · ${bars.length} 根（跟随「指数列表」天数）`);
+    const chartEl = ui.el('div', { class: 'chart chart-lg' });
+    stockBody.replaceChildren(chartEl);
+    if (stockChart) stockChart.dispose();
+    stockChart = ui.createChart(chartEl, buildStockKlineOption(bars));
+  }
+
+  function selectTopStock(symbol, name) {
+    if (!symbol) return;
+    stockState.symbol = symbol;
+    stockState.name = name || '';
+    loadStockChart(symbol, name);
+  }
+
+  async function loadStockChart(symbol, name) {
+    if (!symbol) return;
+    const seq = ++stockState.seq;
+    stockState.loading = true;
+    stockState.error = null;
+    stockState.data = null;
+    renderStockCard();
+    try {
+      const data = await api.get('/api/market/stock', {
+        params: { symbol, days: indexState.count },
+        timeout: 30000,
+      });
+      if (!root.isConnected || seq !== stockState.seq) return;
+      stockState.data = data;
+      stockState.name = (data && data.name) || name || symbol;
+    } catch (err) {
+      if (seq !== stockState.seq) return;
+      stockState.error = err;
+    } finally {
+      if (seq === stockState.seq) {
+        stockState.loading = false;
+        if (root.isConnected) renderStockCard();
+      }
+    }
+  }
 
   topTable.setLoading();
 
@@ -1355,6 +1456,8 @@ function mount(root) {
       bindKlineInteractions(klineChart);
       renderOverview();
       refreshTopAmount(viewDate());
+      // 个股 K 线根数跟随「指数列表」选择的天数：已选中个股则按新根数重载
+      if (stockState.symbol) loadStockChart(stockState.symbol, stockState.name);
     } catch (err) {
       if (!root.isConnected || seq !== indexState.seq) return;
       indexSummary.replaceChildren(ui.emptyState('指数数据加载失败', err.detail || err.message));
@@ -1450,6 +1553,10 @@ function mount(root) {
   }
 
   page.cleanup = () => {
+    if (stockChart) {
+      stockChart.dispose();
+      stockChart = null;
+    }
     if (klineChart) {
       klineChart.dispose();
       klineChart = null;

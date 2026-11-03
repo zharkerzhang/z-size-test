@@ -518,6 +518,11 @@ function mount(root) {
     stockError: null,
     stockDays: 30,
     targetsCollapsed: false, // 目标股列表是否折叠（点击逐笔明细时自动折叠）
+    targetsDate: '', // 目标股列表日期（'' = 最新交易日，无信号时后端自动回退）
+    targetsDates: [], // 日期选择器可选日期（升序）
+    targetsLoading: false,
+    targetsSeq: 0, // 目标股请求序号（切日期/切策略时丢弃过期响应）
+    targetsPendingDate: '',
   };
 
   let layoutEl = null;
@@ -794,14 +799,49 @@ function mount(root) {
         refreshTargetsCard();
       },
     });
+    const dates = (state.targetsDates && state.targetsDates.length)
+      ? state.targetsDates
+      : ui.recentTradeDates(60, (state.meta && state.meta.date) || undefined);
+    const dateInput = ui.el('input', {
+      type: 'date',
+      class: 'date-input',
+      title: '选择日期查看该交易日的目标股（默认最新交易日）',
+      value: state.targetsDate || (dates.length ? dates[dates.length - 1] : ''),
+      min: dates.length ? dates[0] : null,
+      max: dates.length ? dates[dates.length - 1] : null,
+      onchange: (event) => {
+        state.targetsDate = event.target.value || '';
+        loadTargetsByDate(policy.id, state.targetsDate);
+      },
+    });
+    const resetDateBtn = ui.el('button', {
+      type: 'button',
+      class: 'btn btn-sm',
+      text: '最新',
+      title: '回到默认（最新交易日；该日无数据则显示「没有数据」）',
+      onclick: () => {
+        state.targetsDate = '';
+        loadTargetsByDate(policy.id, '');
+      },
+    });
     const card = ui.card({
       title: '目标股列表',
       sub: collapsed
         ? `已折叠（目标 ${targets.length} 只，信号日 ${signalDate}）`
-        : `最近信号日 ${signalDate} · 目标交易日 ${policy.target_date || '—'}`,
+        : [
+          state.targetsDate
+            ? (policy.targets_snapped
+              ? `所选 ${policy.targets_requested || state.targetsDate}（非交易日）→ 交易日 ${policy.targets_date || signalDate}`
+              : `所选日期 ${state.targetsDate}`)
+            : '最新交易日',
+          `信号日 ${signalDate}`,
+          `目标交易日 ${policy.target_date || '—'}`,
+        ].join(' · '),
       bodyClass: 'is-tight',
-      extra: ui.inlineGroup(
+      extra: ui.el('div', { class: 'card-extra-row' },
         ui.badge(`目标 ${targets.length} 只`, targets.length ? 'primary' : 'empty'),
+        dateInput,
+        resetDateBtn,
         toggleBtn,
       ),
     });
@@ -813,17 +853,44 @@ function mount(root) {
       }));
       return card.root;
     }
+    if (state.targetsLoading) {
+      // 加载态：清空列表 + 转圈 + 禁用日期控件，避免误以为「选择没生效」
+      const pending = state.targetsPendingDate || state.targetsDate || '最新交易日';
+      card.setSub(`正在计算 ${pending} 的目标股…（后端需按日回补选股，通常 5~60s）`);
+      card.setExtra(ui.el('div', { class: 'card-extra-row' },
+        ui.inlineGroup(
+          ui.el('span', { class: 'spinner' }),
+          ui.badge('计算中…', 'primary'),
+        ),
+        dateInput,
+        resetDateBtn,
+        toggleBtn,
+      ));
+      dateInput.disabled = true;
+      resetDateBtn.disabled = true;
+      dateInput.title = '正在计算，请稍候…';
+      card.body.append(ui.el('div', { class: 'targets-loading' },
+        ui.el('span', { class: 'spinner' }),
+        ui.el('div', {},
+          ui.el('div', { class: 'targets-loading-text' },
+            '加载中… ', ui.el('b', { text: pending })),
+          ui.el('div', { class: 'targets-loading-hint',
+            text: '正在向后端请求该交易日的目标股列表，完成后自动刷新' }),
+        ),
+      ));
+      return card.root;
+    }
     if (!targets.length) {
+      const missing = policy.status === 'missing_data' || policy.status === 'unsupported';
       card.body.append(ui.emptyState(
-        policy.status === 'missing_data' || policy.status === 'unsupported'
-          ? '暂无目标股（数据源缺失）' : '暂无信号',
+        missing ? '暂无目标股（数据源缺失）' : '没有数据',
         policy.status_text || '',
       ));
       return card.root;
     }
     const table = ui.dataTable({
       wrapClass: 'is-short',
-      emptyText: '暂无信号',
+      emptyText: '没有数据',
       rowKey: (row) => row.symbol,
       onRowClick: (row) => selectStockTarget(row.symbol, row.name),
       columns: [
@@ -1247,6 +1314,43 @@ function mount(root) {
     return card.root;
   }
 
+  /** 按日期加载某策略的目标股（原地刷新目标股卡片，不动 BT 图表） */
+  async function loadTargetsByDate(policyId, date) {
+    const policy = state.items.find((item) => item.id === policyId);
+    if (!policy) return;
+    // 允许加载中再次选择日期：递增序号，旧的响应到达后直接丢弃
+    const seq = ++state.targetsSeq;
+    state.targetsLoading = true;
+    state.targetsPendingDate = date || '';
+    state.targetsCollapsed = false;
+    refreshTargetsCard();
+    try {
+      const params = {};
+      if (date) params.date = date;
+      const data = await api.get(
+        `/api/policies/${encodeURIComponent(policyId)}/targets`, { params, timeout: 180000 });
+      if (!root.isConnected || seq !== state.targetsSeq) return;
+      state.targetsDates = Array.isArray(data.available_dates) ? data.available_dates : state.targetsDates;
+      policy.targets = Array.isArray(data.targets) ? data.targets : [];
+      policy.signal_date = data.signal_date;
+      policy.target_date = data.target_date;
+      policy.next_trade_date = data.next_trade_date;
+      policy.status_text = data.status_text;
+      policy.targets_date = data.date;
+      policy.targets_requested = data.requested_date;
+      policy.targets_snapped = Boolean(data.snapped);
+    } catch (err) {
+      if (seq !== state.targetsSeq) return;
+      ui.toast(`目标股加载失败：${err.detail || err.message}`, 'err', { duration: 5200 });
+    } finally {
+      if (seq === state.targetsSeq) {
+        state.targetsLoading = false;
+        state.targetsPendingDate = '';
+        if (root.isConnected) refreshTargetsCard();
+      }
+    }
+  }
+
   /** 只重绘目标股卡片（不触碰 BT 卡片 / 图表） */
   function refreshTargetsCard() {
     const policy = selectedPolicy();
@@ -1452,6 +1556,9 @@ function mount(root) {
     state.btError = null;
     state.btLoading = false;
     renderAll();
+    // 目标股列表：默认取「最新交易日」（该日无数据即显示「没有数据」，不回退），
+    // 与 /api/policies 的「最近信号日」口径区分开，因此单独拉一次。
+    loadTargetsByDate(id, '').catch(() => {});
     const options = await ensureOptions(id, { force });
     if (!root.isConnected || seq !== state.prepSeq) return;
     renderAll();
@@ -1469,6 +1576,17 @@ function mount(root) {
   function selectPolicy(id) {
     if (!id || id === state.selectedId) return;
     state.selectedId = id;
+    state.targetsDate = '';
+    state.targetsDates = [];
+    state.targetsSeq += 1;          // 丢弃上一个策略的在途请求
+    state.targetsLoading = false;
+    state.targetsPendingDate = '';
+    const policy = state.items.find((item) => item.id === id);
+    if (policy) {
+      policy.targets_date = null;
+      policy.targets_requested = null;
+      policy.targets_snapped = false;
+    }
     renderAll();
     ensureBacktestFor(id);
   }
