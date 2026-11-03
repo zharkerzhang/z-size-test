@@ -122,8 +122,17 @@ export async function offlineRequest(path, params = {}) {
   }
 
   if (p === '/market/stock') {
-    const payload = await loadJson('stocks.json');
-    const bars = payload[q.symbol];
+    let bars = null;
+    try {
+      bars = await loadJson(`stocks/${q.symbol}.json`);   // 按需加载单只个股（推荐）
+    } catch (_err) {
+      try {
+        const legacy = await loadJson('stocks.json');     // 兼容旧版整包
+        bars = legacy[q.symbol];
+      } catch (_err2) {
+        bars = null;
+      }
+    }
     if (!bars) {
       throw offlineError(`离线包未包含个股 ${q.symbol} 的 K 线（导出时仅包含目标股/逐笔/成分股涉及的标的）`);
     }
