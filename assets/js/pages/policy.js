@@ -518,6 +518,7 @@ function mount(root) {
     stockError: null,
     stockDays: 30,
     targetsCollapsed: false, // 目标股列表是否折叠（点击逐笔明细时自动折叠）
+    btCollapsed: false, // BT 回测面板是否折叠（标题右侧「收起回测/展开回测」）
     targetsDate: '', // 目标股列表日期（'' = 最新交易日，无信号时后端自动回退）
     targetsDates: [], // 日期选择器可选日期（升序）
     targetsLoading: false,
@@ -1221,6 +1222,72 @@ function mount(root) {
     return card.root;
   }
 
+  function renderBtCard(policy) {
+    const options = state.optionsById.get(policy.id) || null;
+    const config = state.configs.get(policy.id) || null;
+    const collapsed = state.btCollapsed;
+    const toggleBtn = ui.el('button', {
+      type: 'button',
+      class: 'btn btn-sm',
+      text: collapsed ? '展开回测 ▼' : '收起回测 ▲',
+      title: collapsed ? '展开 BT 回测' : '折叠 BT 回测（方便直接查看目标股列表）',
+      onclick: () => {
+        state.btCollapsed = !state.btCollapsed;
+        renderDetail();
+      },
+    });
+    const card = ui.card({
+      title: 'BT 回测',
+      sub: collapsed
+        ? `已折叠${state.bt ? `（状态 ${state.bt.status || 'ok'}）` : ''}`
+        : '日期区间 / 卖盘策略 / 回测引擎 / 策略参数 → 点击「测试」重跑 select + backtest',
+      className: 'bt-panel',
+      extra: toggleBtn,
+    });
+
+    if (!options || !config) {
+      card.setExtra(ui.inlineGroup(toggleBtn, ui.badge('加载中…', 'primary')));
+      card.body.append(ui.loadingState('回测参数加载中…'));
+      return card.root;
+    }
+    if (!options.supported) {
+      card.setExtra(ui.inlineGroup(toggleBtn, ui.badge('不可回测', 'missing')));
+      card.body.append(btUnavailableNode(policy, options.unsupported_reason));
+      return card.root;
+    }
+
+    card.setExtra(ui.inlineGroup(
+      toggleBtn,
+      ui.badge(state.btLoading ? '回测中…' : (state.bt ? `状态 ${state.bt.status || 'ok'}` : '待测试'),
+        state.btLoading ? 'primary' : (state.bt && state.bt.status === 'error' ? 'error' : 'missing')),
+      ui.badge(options.vbt_available ? 'vbt 可用' : 'vbt 不可用', options.vbt_available ? 'missing' : 'warn'),
+    ));
+
+    if (collapsed) {
+      card.body.append(ui.el('div', {
+        class: 'detail-section-empty',
+        style: { padding: '10px 14px' },
+        text: 'BT 回测已折叠（点击「展开回测」查看参数与结果）',
+      }));
+      return card.root;
+    }
+
+    card.body.append(buildBtControls(policy, options, config));
+
+    const resultBox = ui.el('div', { class: 'bt-result' });
+    if (state.btLoading) {
+      resultBox.append(ui.loadingState('回测计算中…（冷启动可能 20~90s）'));
+    } else if (state.btError) {
+      resultBox.append(ui.errorState(state.btError, () => runBacktest(policy, { force: true })));
+    } else if (!state.bt) {
+      resultBox.append(ui.emptyState('尚未回测', '调整参数后点击「测试」'));
+    } else {
+      renderBtResult(resultBox, policy, state.bt, config);
+    }
+    card.body.append(resultBox);
+    return card.root;
+  }
+
   /* ================================================================== */
   /* 右侧 1.4 个股 K 线（底部）：BT 逐笔区间 / 目标股近 N 日             */
   /* ================================================================== */
@@ -1581,6 +1648,13 @@ function mount(root) {
     state.targetsSeq += 1;          // 丢弃上一个策略的在途请求
     state.targetsLoading = false;
     state.targetsPendingDate = '';
+    // 切换策略时必须清空「个股 K 线」：否则会残留上一个策略查看的个股日线
+    // （常见场景：A 策略点逐笔/目标股看 K 线 → 切到 B 策略做回测，底部仍显示 A 的个股）
+    state.stockSeq += 1;            // 丢弃上一个策略在途的个股 K 线请求
+    state.stock = null;
+    state.stockData = null;
+    state.stockLoading = false;
+    state.stockError = null;
     const policy = state.items.find((item) => item.id === id);
     if (policy) {
       policy.targets_date = null;
