@@ -1591,12 +1591,15 @@ function mount(root) {
           sell: config.sell, sell_label: config.sell, engine: config.engine, engine_label: config.engine } };
       } else {
         data = await api.post(`/api/policies/${encodeURIComponent(policy.id)}/test`, {
+          // refresh=1：手动「测试」强制后端重算（跳过 6h 磁盘缓存），
+          // 保证点一次「测试」验证的就是当前代码 + 当前数据（qu-web ISSUES W-4）
           body: {
             start: config.st,
             end: config.et,
             sell: config.sell,
             engine: config.engine,
             params: config.params,
+            refresh: 1,
           },
           timeout: 240000,
         });
